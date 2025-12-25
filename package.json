@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "nodemailer": "^7.0.12",
+    "sslcommerz-lts": "^1.2.0"
+  }
+}
