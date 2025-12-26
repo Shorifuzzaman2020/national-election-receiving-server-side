@@ -20,12 +20,28 @@ const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster
 const client = new MongoClient(uri);
 
 // Connect DB
+// async function start() {
+//     await client.connect();
+//     console.log("MongoDB Connected");
+//     app.listen(port, () => console.log("Server running on", port));
+// }
+// start();
+
 async function start() {
+  try {
     await client.connect();
     console.log("MongoDB Connected");
-    app.listen(port, () => console.log("Server running on", port));
+
+    app.listen(port, () => {
+      console.log("Server running on", port);
+    });
+  } catch (err) {
+    console.error("Startup Error:", err);
+    process.exit(1);
+  }
 }
 start();
+
 
 
 const db = client.db("electionSystem");
@@ -382,44 +398,44 @@ app.post("/api/admin/end-voting", async (req, res) => {
 
 
 // Add this to your backend (app.js)
-app.get("/api/election/status", async (req, res) => {
-    try {
-        const election = await db.collection("elections").findOne({ type: "current" });
+// app.get("/api/election/status", async (req, res) => {
+//     try {
+//         const election = await db.collection("elections").findOne({ type: "current" });
         
-        if (!election) {
-            return res.json({
-                success: true,
-                votingStatus: "NOT_STARTED",
-                votingOpen: false,
-                finished: false
-            });
-        }
+//         if (!election) {
+//             return res.json({
+//                 success: true,
+//                 votingStatus: "NOT_STARTED",
+//                 votingOpen: false,
+//                 finished: false
+//             });
+//         }
 
-        // Determine voting status based on your schema
-        let votingStatus = "NOT_STARTED";
-        if (election.finished) {
-            votingStatus = "Ended";
-        } else if (election.votingOpen) {
-            votingStatus = "Started";
-        }
+//         // Determine voting status based on your schema
+//         let votingStatus = "NOT_STARTED";
+//         if (election.finished) {
+//             votingStatus = "Ended";
+//         } else if (election.votingOpen) {
+//             votingStatus = "Started";
+//         }
 
-        res.json({
-            success: true,
-            votingStatus,
-            votingOpen: election.votingOpen || false,
-            finished: election.finished || false,
-            votingStartedAt: election.votingStartedAt,
-            votingEndedAt: election.votingEndedAt
-        });
+//         res.json({
+//             success: true,
+//             votingStatus,
+//             votingOpen: election.votingOpen || false,
+//             finished: election.finished || false,
+//             votingStartedAt: election.votingStartedAt,
+//             votingEndedAt: election.votingEndedAt
+//         });
 
-    } catch (error) {
-        console.error("Get election status error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Failed to get election status"
-        });
-    }
-});
+//     } catch (error) {
+//         console.error("Get election status error:", error);
+//         res.status(500).json({
+//             success: false,
+//             message: "Failed to get election status"
+//         });
+//     }
+// });
 
 
 
@@ -486,6 +502,60 @@ app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
 
 
 
+app.patch("/api/vote", async (req, res) => {
+    try {
+        const { voterId, nominationId } = req.body;
+
+        if (!voterId || !nominationId) {
+            return res.status(400).send({ message: "Missing voterId or nominationId" });
+        }
+
+        const election = await elections.findOne({ type: "current" });
+
+        if (!election || election.votingStatus !== "Started") {
+            return res.status(403).send({ message: "Voting is not active" });
+        }
+
+        // 🔎 Find voter
+        const voter = await voters.findOne({ voterId });
+        if (!voter) return res.status(404).send({ message: "Voter not found" });
+
+        // 🔒 Prevent double voting
+        if (voter.status === "inactive") {
+            return res.status(400).send({ message: "You already voted" });
+        }
+
+        // 🎯 Find candidate
+        const candidate = await nominations.findOne({ nominationId });
+        if (!candidate) return res.status(404).send({ message: "Candidate not found" });
+
+        // 🧮 ATOMIC vote increment
+        await nominations.updateOne(
+            { nominationId },
+            { $inc: { votes: 1 } }
+        );
+
+        // 🔐 Lock voter account
+        await voters.updateOne(
+            { voterId },
+            {
+                $set: {
+                    status: "inactive",
+                    votedAt: new Date()
+                }
+            }
+        );
+
+        res.send({
+            success: true,
+            message: "Vote recorded successfully"
+        });
+
+    } catch (error) {
+        console.error("Voting error:", error);
+        res.status(500).send({ message: "Voting failed" });
+    }
+});
 
 
 
@@ -1047,11 +1117,26 @@ app.post("/admin/unpublish", async (req, res) => {
     res.send({ message: "Nomination Closed" });
 });
 
-app.get("/election/status", async (req, res) => {
-    const election = await elections.findOne({ type: "current" });
-    res.send({ nominationOpen: election?.nominationOpen || false });
-});
+// app.get("/election/status", async (req, res) => {
+//     const election = await elections.findOne({ type: "current" });
+//     res.send({ nominationOpen: election?.nominationOpen || false });
+// });
 
+app.get("/election/status", async (req, res) => {
+    try {
+        const election = await elections.findOne({ type: "current" });
+
+        res.send({
+            nominationOpen: election?.nominationOpen || false,
+            votingStatus: election?.votingStatus || "NOT_STARTED"
+            
+        });
+
+    } catch (error) {
+        console.error("Election Status Error:", error);
+        res.status(500).send({ message: "Failed to get election status" });
+    }
+});
 
 
 // Admin - Publish Nomination
