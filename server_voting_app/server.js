@@ -178,12 +178,12 @@ app.post("/api/voter/login", async (req, res) => {
         }
 
         // Check if voter is active
-        if (voter.status !== 'active') {
-            return res.status(403).json({
-                success: false,
-                message: "Voter account is not active"
-            });
-        }
+        // if (voter.status !== 'active') {
+        //     return res.status(403).json({
+        //         success: false,
+        //         message: "Voter account is not active"
+        //     });
+        // }
 
         // Find and verify code
         const codeRecord = await db.collection("voterCodes").findOne({ voterId });
@@ -458,10 +458,52 @@ function authenticateVoter(req, res, next) {
 }
 
 // Get voter profile
+// app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
+//     try {
+//         const voter = await db.collection("voters").findOne({ voterId: req.voter.voterId });
+        
+//         if (!voter) {
+//             return res.status(404).json({
+//                 success: false,
+//                 message: "Voter not found"
+//             });
+//         }
+
+//         const hasVoted = await db.collection("votes").findOne({ voterId: voter.voterId });
+//         const election = await db.collection("elections").findOne({ type: "current" });
+
+//         res.json({
+//             success: true,
+//             voter: {
+//                 name: voter.name,
+//                 voterId: voter.voterId,
+//                 email: voter.email,
+//                 district: voter.district,
+//                 phone: voter.phone,
+//                 dob: voter.dob,
+//                 bloodGroup: voter.bloodGroup
+//             },
+//             votingStatus: {
+//                 hasVoted: !!hasVoted,
+//                 votingOpen: election?.votingOpen || false,
+//                 electionFinished: election?.finished || false,
+//                 lastVotedAt: hasVoted?.votedAt
+//             }
+//         });
+
+//     } catch (error) {
+//         console.error("Get profile error:", error);
+//         res.status(500).json({
+//             success: false,
+//             message: "Failed to fetch profile"
+//         });
+//     }
+// });
+
 app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
     try {
-        const voter = await db.collection("voters").findOne({ voterId: req.voter.voterId });
-        
+        const voter = await voters.findOne({ voterId: req.voter.voterId });
+
         if (!voter) {
             return res.status(404).json({
                 success: false,
@@ -469,8 +511,9 @@ app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
             });
         }
 
-        const hasVoted = await db.collection("votes").findOne({ voterId: voter.voterId });
-        const election = await db.collection("elections").findOne({ type: "current" });
+        const hasVoted = voter.status === "inactive";
+
+        const election = await elections.findOne({ type: "current" });
 
         res.json({
             success: true,
@@ -479,15 +522,12 @@ app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
                 voterId: voter.voterId,
                 email: voter.email,
                 district: voter.district,
-                phone: voter.phone,
-                dob: voter.dob,
-                bloodGroup: voter.bloodGroup
+                status: voter.status
             },
             votingStatus: {
-                hasVoted: !!hasVoted,
+                hasVoted,
                 votingOpen: election?.votingOpen || false,
-                electionFinished: election?.finished || false,
-                lastVotedAt: hasVoted?.votedAt
+                electionFinished: election?.finished || false
             }
         });
 
@@ -501,6 +541,61 @@ app.get("/api/voter/profile", authenticateVoter, async (req, res) => {
 });
 
 
+
+// app.patch("/api/vote", async (req, res) => {
+//     try {
+//         const { voterId, nominationId } = req.body;
+
+//         if (!voterId || !nominationId) {
+//             return res.status(400).send({ message: "Missing voterId or nominationId" });
+//         }
+
+//         const election = await elections.findOne({ type: "current" });
+
+//         if (!election || election.votingStatus !== "Started") {
+//             return res.status(403).send({ message: "Voting is not active" });
+//         }
+
+//         // 🔎 Find voter
+//         const voter = await voters.findOne({ voterId });
+//         if (!voter) return res.status(404).send({ message: "Voter not found" });
+
+//         // 🔒 Prevent double voting
+//         if (voter.status === "inactive") {
+//             return res.status(400).send({ message: "You already voted" });
+//         }
+
+//         // 🎯 Find candidate
+//         const candidate = await nominations.findOne({ nominationId });
+//         if (!candidate) return res.status(404).send({ message: "Candidate not found" });
+
+//         // 🧮 ATOMIC vote increment
+//         await nominations.updateOne(
+//             { nominationId },
+//             { $inc: { votes: 1 } }
+//         );
+
+//         // 🔐 Lock voter account
+//         await voters.updateOne(
+//             { voterId },
+//             {
+//                 $set: {
+//                     status: "inactive",
+//                     votedAt: new Date()
+//                 }
+//             }
+//         );
+
+//         res.send({
+//             success: true,
+//             message: "Vote recorded successfully"
+//         });
+
+//     } catch (error) {
+//         console.error("Voting error:", error);
+//         res.status(500).send({ message: "Voting failed" });
+//     }
+// });
 
 app.patch("/api/vote", async (req, res) => {
     try {
@@ -516,26 +611,31 @@ app.patch("/api/vote", async (req, res) => {
             return res.status(403).send({ message: "Voting is not active" });
         }
 
-        // 🔎 Find voter
         const voter = await voters.findOne({ voterId });
         if (!voter) return res.status(404).send({ message: "Voter not found" });
 
-        // 🔒 Prevent double voting
+        // 🚫 Prevent double voting
         if (voter.status === "inactive") {
             return res.status(400).send({ message: "You already voted" });
         }
 
-        // 🎯 Find candidate
         const candidate = await nominations.findOne({ nominationId });
         if (!candidate) return res.status(404).send({ message: "Candidate not found" });
 
-        // 🧮 ATOMIC vote increment
+        // ✅ Increase candidate votes
         await nominations.updateOne(
             { nominationId },
             { $inc: { votes: 1 } }
         );
 
-        // 🔐 Lock voter account
+        // ✅ VERY IMPORTANT — store vote record
+        await votes.insertOne({
+            voterId,
+            nominationId,
+            votedAt: new Date()
+        });
+
+        // ✅ Lock voter permanently
         await voters.updateOne(
             { voterId },
             {
@@ -556,7 +656,6 @@ app.patch("/api/vote", async (req, res) => {
         res.status(500).send({ message: "Voting failed" });
     }
 });
-
 
 
 
